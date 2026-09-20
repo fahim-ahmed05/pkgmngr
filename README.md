@@ -177,6 +177,12 @@ pkgmngr/
   line forced). Setting it at load instead would colour the redirected output of every
   other tool in a profile-sourced session too; `$env:PYTHONIOENCODING=utf-8` is the one
   variable pkg does leave set, and only when it was empty.
+- Confirmations are gum's Yes/No buttons, or a typed `[y/N]` when gum is absent. The dialog
+  goes through `Out-Host` like every card because a native command's stdout becomes part of
+  the enclosing function's return value: called bare, `Confirm-Pkg` would hand its callers
+  the rendered screen with the answer as one more line, and a multi-element array is always
+  truthy - every `if (-not (Confirm-Pkg ...))` guard would approve whatever it was checking.
+  The answer is gum's exit code, and `--default=false` makes a bare Enter mean No.
 - `?` previews are cached in `cache/preview/` for 15 minutes, because `winget show` costs
   about a second and fzf re-renders the preview every time the cursor stops. A miss is
   never cached - a source that was unreachable a moment ago should not stay wrong.

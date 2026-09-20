@@ -158,7 +158,7 @@ function Start-PkgInstall {
 
     Write-PkgCard "Packages To Install ($($targets.Count)):`n$($summary -join "`n")" -Color 42
 
-    if (-not (Confirm-Pkg "Proceed with installation?")) {
+    if (-not (Confirm-Pkg "Proceed with installation?" 42)) {
         Write-PkgNote "[-] Installation aborted."
         return
     }

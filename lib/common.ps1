@@ -114,18 +114,43 @@ function Write-PkgNote {
 function Confirm-Pkg {
     <#
     .SYNOPSIS
-        Interactive yes/no prompt. Returns $true when confirmed.
+        Interactive yes/no choice. Returns $true when confirmed.
     .DESCRIPTION
-        Uses Read-Host rather than `gum confirm`: gum renders its box on stdout,
-        and any caller that captures stdout (notably `if (-not (Confirm-Pkg ...))`)
-        would test a non-empty array instead of the answer - silently approving
-        every confirmation. Read-Host writes nowhere but the host.
+        gum's button dialog when it is installed, a `[y/N]` line when it is not.
+
+        The dialog is piped to Out-Host rather than simply called, and that is the
+        whole reason it can be used at all: gum renders on stdout, PowerShell folds
+        a native command's stdout into the enclosing function's return value, and so
+        a bare `gum confirm` would hand back the screen's lines with the answer as
+        one more element. Every caller is a guard shaped `if (-not (Confirm-Pkg ...))`
+        and a multi-element array is always truthy, which turns a declined uninstall
+        into a performed one. Out-Host keeps the dialog on the screen and out of the
+        value; the answer then comes from gum's exit code, read before anything else
+        can overwrite it. --default=false makes a bare Enter mean No.
     #>
     param(
         [Parameter(Mandatory = $true, Position = 0)]
-        [string]$Message
+        [string]$Message,
+        [Parameter(Position = 1)]
+        [int]$Color = 214
     )
-    Write-PkgNote "$Message [y/N]" 214
+    if ($script:PkgHasGum) {
+        $confirmed = $false
+        try {
+            # Same two reasons as Invoke-PkgStyled: gum colours itself only for a
+            # terminal, and it leaves a capability probe in the input buffer.
+            $env:CLICOLOR_FORCE = '1'
+            gum confirm --default=false --prompt.foreground=$Color `
+                --selected.background=$Color -- $Message | Out-Host
+            $confirmed = $LASTEXITCODE -eq 0
+        } finally {
+            Remove-Item Env:CLICOLOR_FORCE -ErrorAction SilentlyContinue
+            Clear-PkgInputBuffer
+        }
+        return $confirmed
+    }
+
+    Write-PkgNote "$Message [y/N]" $Color
     $answer = Read-Host '  >'
     Clear-PkgInputBuffer
     return $answer -match '^[Yy]'

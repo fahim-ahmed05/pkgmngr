@@ -105,7 +105,7 @@ function Start-PkgUninstall {
         $declined = 0
         foreach ($target in $explicit) {
             $mgr, $id = (Resolve-PkgTarget $target) -split ':', 2
-            if (-not ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?"))) {
+            if (-not ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?" 203))) {
                 Write-PkgNote "[-] Skipped $id."
                 $declined++
                 continue
@@ -193,7 +193,7 @@ function Start-PkgUninstall {
     if (-not $force) {
         Write-PkgCard "Packages To Uninstall ($($toUninstall.Count)):`n$($summaryList -join "`n")" -Color 203
 
-        if (-not (Confirm-Pkg "Proceed with uninstallation?")) {
+        if (-not (Confirm-Pkg "Proceed with uninstallation?" 203)) {
             Write-PkgNote "[-] Uninstallation aborted."
             return
         }
