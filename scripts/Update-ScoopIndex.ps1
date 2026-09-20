@@ -9,18 +9,14 @@
     index makes every bucket look new and triggers one full scan.
 .NOTES
     Not a standalone search tool - fzf does the searching, this only builds the
-    catalog data. Index: <repo>\cache\scoop-index.json, overridable via
-    $env:PKG_SCOOP_INDEX (the same variable Get-Catalog.py resolves).
+    catalog data. The index always lives at <repo>\cache\scoop-index.json, which
+    is where scripts/Get-Catalog.py reads it from.
 #>
 [CmdletBinding()]
 param()
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$indexFile = if ($env:PKG_SCOOP_INDEX) {
-    $env:PKG_SCOOP_INDEX
-} else {
-    Join-Path (Join-Path $repoRoot 'cache') 'scoop-index.json'
-}
+$indexFile = Join-Path (Join-Path $repoRoot 'cache') 'scoop-index.json'
 
 $scoopDir = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
 $script:BucketsDir = Join-Path $scoopDir 'buckets'

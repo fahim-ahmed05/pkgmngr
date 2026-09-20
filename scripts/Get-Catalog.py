@@ -34,21 +34,11 @@ def find_winget_db(cli_path=''):
 
 
 def find_scoop_index():
-    # Built by scripts/Update-ScoopIndex.ps1; the standalone fast-scoop-search
-    # checkout is still honoured so existing setups keep working.
-    env = os.environ.get('PKG_SCOOP_INDEX')
-    if env and os.path.isfile(env):
-        return env
+    # Built by scripts/Update-ScoopIndex.ps1 into the repository's own cache.
+    # One location, no override: without it the bucket manifests are scanned below.
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(os.path.dirname(here), 'cache', 'scoop-index.json'),
-        os.path.join(os.path.expanduser('~'), 'Git',
-                     'fast-scoop-search', 'scoop-index.json'),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    return ''
+    path = os.path.join(os.path.dirname(here), 'cache', 'scoop-index.json')
+    return path if os.path.isfile(path) else ''
 
 
 def scoop_line(bucket, pkg, ver):
