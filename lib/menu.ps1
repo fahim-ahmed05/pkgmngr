@@ -46,7 +46,10 @@ ONE MANAGER ONLY (paste-ready)
 FZF SHORTCUTS
     Tab select | Shift-Tab up-select | Enter confirm | ? toggle info | Esc cancel
 '@
-    Write-PkgCard $usage -Color 39
+    # Deliberately uncoloured: every other card carries a manager or a result, and
+    # paints itself with that id. A screenful of reference text is a man page, and a
+    # man page is console foreground in a frame.
+    Write-PkgCard $usage -Color 252
 }
 
 # Menu entries: dispatch key, label, description

@@ -169,7 +169,8 @@ pkgmngr/
 - Colors: Winget cyan `39`, Scoop gold `214`, MS Store violet `141`, install accent green
   `42`, uninstall accent red `203`. Zero emojis. A card colours its rounded border *and*
   its text with the same id; without gum installed the ids fold onto the console's own
-  eight colors.
+  eight colors. `pkg help` is the exception - a screenful of reference text renders in the
+  default foreground (`252`) inside the frame, man-page style.
 - gum strips its ANSI whenever stdout is not a terminal, and every card here is piped
   through `Out-Host` on purpose - so `CLICOLOR_FORCE=1` is set around each `gum` call and
   removed again straight after it. Without it the boxes render in the default color and
