@@ -4,7 +4,12 @@
 #>
 
 function Invoke-PkgUninstall {
-    <# Executes the uninstall command for one manager + id pair. #>
+    <#
+    .SYNOPSIS
+        Executes the uninstall command for one manager + id pair.
+    .DESCRIPTION
+        Records success in $script:PkgLastOk; see Invoke-PkgInstall.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Manager,
@@ -12,18 +17,28 @@ function Invoke-PkgUninstall {
         [string]$Id
     )
 
+    $script:PkgLastOk = $false
+    if (-not (Test-PkgManager -Manager $Manager)) {
+        Write-PkgNote "[-] $Manager is not installed - cannot remove '$Id'." 203
+        return
+    }
+
     switch ($Manager) {
         { $_ -in 'msstore', 'winget' } {
             Write-PkgCard "Uninstalling $Id via Winget..." -Color 39 -Bold
-            if ($Id -like 'MSIX\*') {
-                winget uninstall --id "$Id"
-            } else {
-                winget uninstall -e --id "$Id"
+            Invoke-PkgManagerCommand -Label "winget uninstall $Id" -Command {
+                if ($Id -like 'MSIX\*') {
+                    winget uninstall --id "$Id"
+                } else {
+                    winget uninstall -e --id "$Id"
+                }
             }
         }
         'scoop' {
             Write-PkgCard "Uninstalling $Id via Scoop..." -Color 214 -Bold
-            scoop uninstall "$Id"
+            Invoke-PkgManagerCommand -Label "scoop uninstall $Id" -Command {
+                scoop uninstall "$Id"
+            }
         }
     }
 }
@@ -77,17 +92,24 @@ function Start-PkgUninstall {
     if ($args_.Count -eq 1 -and $args_[0] -match '^(?<mgr>winget|scoop|msstore):(?<id>.+)$') {
         $mgr = $Matches['mgr']
         $id  = $Matches['id']
-        if (-not $force) {
-            if (-not (Confirm-Pkg "Uninstall '$id' via $mgr?")) {
-                Write-PkgNote "[-] Skipped $id."
-                return
+        if ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?")) {
+            Invoke-PkgUninstall -Manager $mgr -Id $id
+            if ($script:PkgLastOk) {
+                Show-PkgResultCard -Verb 'Removed' -Ok 1
+            } else {
+                Show-PkgResultCard -Verb 'Removed' -Ok 0 -Failed @("$($mgr):$id")
             }
+        } else {
+            Write-PkgNote "[-] Skipped $id."
         }
-        Invoke-PkgUninstall -Manager $mgr -Id $id
         return
     }
 
-    if (-not (Get-PkgDependency -Required @('python'))) { return }
+    if (-not (Get-PkgDependency -Required @('python', 'fzf'))) { return }
+    if (@(Get-PkgManagers).Count -eq 0) {
+        Write-PkgNote '[-] Neither Scoop nor Winget is installed - nothing to uninstall.' 203
+        return
+    }
 
     $query = $args_ -join ' '
     $installed = Get-PkgInstalled -Query $query
@@ -123,7 +145,14 @@ function Start-PkgUninstall {
         "$rawTarget`t$badge$pad$idPadded  $verPadded  $detail"
     }
 
-    $selected = @(Show-PkgPicker -Lines $fzfLines -Mode 'uninstall' -Query $query)
+    # An app whose manager is gone can be listed but never removed
+    $selectable = @(Select-PkgActionableLines $fzfLines)
+    if ($selectable.Count -eq 0) {
+        Write-PkgNote "[-] None of the matching packages can be removed with the managers installed here." 214
+        return
+    }
+
+    $selected = @(Show-PkgPicker -Lines $selectable -Mode 'uninstall' -Query $query)
 
     if ($selected.Count -eq 0) { return }
 
@@ -148,10 +177,13 @@ function Start-PkgUninstall {
         }
     }
 
+    $removed = 0
+    $failed = [System.Collections.Generic.List[string]]::new()
     foreach ($target in $toUninstall) {
         Invoke-PkgUninstall -Manager $target.Manager -Id $target.Id
+        if ($script:PkgLastOk) { $removed++ } else { $failed.Add("$($target.Manager):$($target.Id)") }
     }
 
     Clear-PkgInputBuffer
-    Write-PkgCard "Uninstallation finished." -Color 203 -Bold
+    Show-PkgResultCard -Verb 'Removed' -Ok $removed -Failed $failed.ToArray()
 }

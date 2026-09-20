@@ -9,28 +9,33 @@ without remembering which manager owns which app.
 
 ## Install
 
-No installer needed - it's just a script. Dot-source it from your `$PROFILE`:
-
 ```powershell
-# 1. Clone somewhere
 git clone https://github.com/fahim-ahmed05/pkgmngr "$HOME\Git\pkgmngr"
-
-# 2. Add this line to your PowerShell profile (notepad $PROFILE):
-. "$HOME\Git\pkgmngr\pkg.ps1"
-
-# -or- let setup.ps1 do it for you:
 pwsh -File "$HOME\Git\pkgmngr\setup.ps1"
 ```
 
+`setup.ps1` is the whole installer. It asks where to put pkg (default
+`%USERPROFILE%\.local\bin\pkgmngr`), checks every dependency, offers to install the
+missing ones - Scoop first, Winget if you would rather not have Scoop - then copies
+pkg to that folder and adds the source line to your `$PROFILE`. Say no to anything it
+needs and the run cancels itself and deletes what it created.
+
 Restart the shell. Done - `pkg` is available everywhere.
 
-**Requirements:** pwsh 7+, `fzf` 0.69+ (uses `--header-first` and `--info=inline-right`),
-`python`, and Scoop + Winget themselves. `gum` recommended (styled cards, spinners, confirm
-dialogs - falls back to plain output without it). Everything else, including the Scoop
-catalog indexer, is in this repo - no second clone.
+Already have fzf and python and just want to run from the clone? Skip the installer:
 
 ```powershell
-scoop install fzf python charm-gum
+. "$HOME\Git\pkgmngr\pkg.ps1"     # this is all the installer writes into $PROFILE
+```
+
+**Requirements:** PowerShell 7+, `fzf` 0.69+ (uses `--header-first` and
+`--info=inline-right`), `python`, and **at least one** of Scoop or Winget. `gum` is
+optional - cards and spinners, plain output without it. The Scoop catalog indexer is
+in this repo too, so nothing else needs cloning. `setup.ps1` checks all of this;
+to do it by hand instead:
+
+```powershell
+scoop install fzf python gum
 ```
 
 ## Usage
@@ -82,9 +87,9 @@ auto-routed (`Neovim.Neovim` → winget, `git` → scoop, 12-char store product 
 ```
 pkgmngr/
 ├── pkg.ps1                          # sourceable entry: defines `pkg` + dot-sources lib/
-├── setup.ps1                        # adds/removes the $PROFILE source line
+├── setup.ps1                        # installer: location, dependencies, $PROFILE wiring (-Remove to undo)
 ├── lib/
-│   ├── common.ps1                   # gum cards, confirm, dependency checks, buffer hygiene
+│   ├── common.ps1                   # cards, notes, confirm, dependency and manager checks, buffer hygiene
 │   ├── catalog.ps1                  # catalog loader + shared fzf picker (install/uninstall modes)
 │   ├── install.ps1                  # Start-PkgInstall / Invoke-PkgInstall
 │   ├── uninstall.ps1                # installed-app resolver + uninstall flow
@@ -101,6 +106,11 @@ pkgmngr/
 - Scoop manifests are indexed by the bundled `Update-ScoopIndex.ps1` during `pkg update`:
   it stores each bucket's git hash and only rescans buckets that moved, so a warm refresh
   costs ~25 ms instead of re-reading 5,359 manifests (~1.3 s).
+- **One manager is enough.** A missing Scoop or Winget is a skip, not an error: the
+  catalog and the installed-app list are narrowed to what this machine can actually act
+  on, `pkg update` and `pkg upgrade` name which half they skipped, and each per-package
+  result is checked (`Installed 2 of 3` with the failures listed) instead of an
+  unconditional success card.
 - PowerShell resolves the `WindowsApps` path and hands it to Python (plain Python lacks
   directory-list rights there).
 - Terminal input buffers are flushed after gum/fzf runs so leftover capability probes
@@ -113,6 +123,9 @@ pkgmngr/
 ## Uninstall
 
 ```powershell
-pwsh -File .\setup.ps1 -Remove    # strips the source line from $PROFILE
-Remove-Item ..\pkgmngr -Recurse   # and that's the whole uninstall
+pwsh -File .\setup.ps1 -Remove    # removes the source line and deletes the installed copy
 ```
+
+If you source a clone directly instead of installing, delete that line and the clone -
+nothing else is written anywhere. The generated `cache/` folder is the only file pkg ever
+creates outside your profile.

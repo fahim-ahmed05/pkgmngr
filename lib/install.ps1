@@ -4,7 +4,13 @@
 #>
 
 function Invoke-PkgInstall {
-    <# Executes the install command for one manager-qualified target (e.g. 'scoop:main/git'). #>
+    <#
+    .SYNOPSIS
+        Executes the install command for one manager-qualified target.
+    .DESCRIPTION
+        Records success in $script:PkgLastOk; produces no pipeline output so the
+        manager can keep its own terminal.
+    #>
     param(
         [Parameter(Mandatory = $true, Position = 0)]
         [string]$Target
@@ -27,18 +33,30 @@ function Invoke-PkgInstall {
         $manager = 'scoop'
     }
 
+    $script:PkgLastOk = $false
+    if (-not (Test-PkgManager -Manager $manager)) {
+        Write-PkgNote "[-] $manager is not installed - cannot install '$targetId'." 203
+        return
+    }
+
     switch ($manager) {
         'msstore' {
             Write-PkgCard "Installing $targetId via Microsoft Store..." -Color 141 -Bold
-            winget install -e --id "$targetId" --source msstore --accept-package-agreements --accept-source-agreements
+            Invoke-PkgManagerCommand -Label "winget install $targetId" -BenignExitCode $script:PkgWingetBenignCodes -Command {
+                winget install -e --id "$targetId" --source msstore --accept-package-agreements --accept-source-agreements
+            }
         }
         'winget' {
             Write-PkgCard "Installing $targetId via Winget..." -Color 39 -Bold
-            winget install -e --id "$targetId" --source winget --accept-package-agreements --accept-source-agreements
+            Invoke-PkgManagerCommand -Label "winget install $targetId" -BenignExitCode $script:PkgWingetBenignCodes -Command {
+                winget install -e --id "$targetId" --source winget --accept-package-agreements --accept-source-agreements
+            }
         }
         'scoop' {
             Write-PkgCard "Installing $targetId via Scoop..." -Color 214 -Bold
-            scoop install "$targetId"
+            Invoke-PkgManagerCommand -Label "scoop install $targetId" -Command {
+                scoop install "$targetId"
+            }
         }
     }
 }
@@ -74,15 +92,24 @@ function Start-PkgInstall {
     # Direct install when every argument is an explicit manager-prefixed target
     $explicit = @($args_ | Where-Object { $_ -match '^(winget|scoop|msstore):' })
     if ($args_.Count -gt 0 -and $explicit.Count -eq $args_.Count) {
+        $ok = 0
+        $failed = [System.Collections.Generic.List[string]]::new()
         foreach ($target in $explicit) {
             Invoke-PkgInstall -Target $target
+            if ($script:PkgLastOk) { $ok++ } else { $failed.Add($target) }
         }
+        Show-PkgResultCard -Verb 'Installed' -Ok $ok -Failed $failed.ToArray()
         return
     }
 
-    if (-not (Get-PkgDependency -Required @('python'))) { return }
+    if (-not (Get-PkgDependency -Required @('python', 'fzf'))) { return }
+    if (@(Get-PkgManagers).Count -eq 0) {
+        Write-PkgNote '[-] Neither Scoop nor Winget is installed - there is nothing to install from.' 203
+        return
+    }
 
-    $catalog = Get-PkgCatalog
+    # Only offer what this machine can actually install
+    $catalog = Select-PkgActionableLines (Get-PkgCatalog)
     $query = $args_ -join ' '
     $selected = @(Show-PkgPicker -Lines $catalog -Mode 'install' -Query $query)
 
@@ -114,10 +141,13 @@ function Start-PkgInstall {
         return
     }
 
+    $installed = 0
+    $failed = [System.Collections.Generic.List[string]]::new()
     foreach ($target in $targets) {
         Invoke-PkgInstall -Target $target
+        if ($script:PkgLastOk) { $installed++ } else { $failed.Add($target) }
     }
 
     Clear-PkgInputBuffer
-    Write-PkgCard "Installation finished." -Color 42 -Bold
+    Show-PkgResultCard -Verb 'Installed' -Ok $installed -Failed $failed.ToArray()
 }
