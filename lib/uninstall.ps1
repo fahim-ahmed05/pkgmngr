@@ -27,7 +27,10 @@ function Invoke-PkgUninstall {
         { $_ -in 'msstore', 'winget' } {
             Write-PkgCard "Uninstalling $Id via Winget..." -Color 39 -Bold
             Invoke-PkgManagerCommand -Label "winget uninstall $Id" -Command {
-                if ($Id -like 'MSIX\*') {
+                # Ids that came out of Windows' own install tables (MSIX packages and
+                # ARP entries, which can hold spaces) are addressed by --id only; the
+                # '-e --id' exact-match route is for catalog ids.
+                if ($Id -match '^(MSIX|ARP)\\') {
                     winget uninstall --id "$Id"
                 } else {
                     winget uninstall -e --id "$Id"
@@ -99,20 +102,21 @@ function Start-PkgUninstall {
     if ($args_.Count -gt 0 -and $explicit.Count -eq $args_.Count) {
         $removed = 0
         $failed = [System.Collections.Generic.List[string]]::new()
-        $answered = 0
+        $declined = 0
         foreach ($target in $explicit) {
             $mgr, $id = (Resolve-PkgTarget $target) -split ':', 2
             if (-not ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?"))) {
                 Write-PkgNote "[-] Skipped $id."
-                $answered++
+                $declined++
                 continue
             }
-            $answered++
             Invoke-PkgUninstall -Manager $mgr -Id $id
             if ($script:PkgLastOk) { $removed++ } else { $failed.Add("$($mgr):$id") }
         }
         # Nothing was agreed to, so there is no result to report
-        if ($answered -gt 0) { Show-PkgResultCard -Verb 'Removed' -Ok $removed -Failed $failed.ToArray() }
+        if ($removed -or $failed.Count -or $declined) {
+            Show-PkgResultCard -Verb 'Removed' -Ok $removed -Failed $failed.ToArray() -Declined $declined
+        }
         return
     }
 
@@ -153,8 +157,8 @@ function Start-PkgUninstall {
         $badge = "$badgeColor[$badgeText]$esc[0m"
         $pad = ' ' * [Math]::Max(2, 20 - ($badgeText.Length + 2))
 
-        $dispId = if ($item.Id.Length -gt 40) { $item.Id.Substring(0, 39) + '…' } else { $item.Id }
-        $dispVer = if ($item.Version.Length -gt 16) { $item.Version.Substring(0, 15) + '…' } else { $item.Version }
+        $dispId = if ($item.Id.Length -gt 40) { $item.Id.Substring(0, 38) + '..' } else { $item.Id }
+        $dispVer = if ($item.Version.Length -gt 16) { $item.Version.Substring(0, 14) + '..' } else { $item.Version }
 
         $idPadded  = '{0,-40}' -f $dispId
         $verPadded = '{0,-16}' -f $dispVer
@@ -180,7 +184,7 @@ function Start-PkgUninstall {
     foreach ($raw in $selected) {
         if ($raw -match '^(?<mgr>[^:]+):(?<id>.+)$') {
             $toUninstall.Add([PSCustomObject]@{ Manager = $Matches['mgr']; Id = $Matches['id'] })
-            $summaryList.Add("  • [$($Matches['mgr'])] $($Matches['id'])")
+            $summaryList.Add("  - [$($Matches['mgr'])] $($Matches['id'])")
         }
     }
 

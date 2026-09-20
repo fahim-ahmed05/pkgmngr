@@ -64,11 +64,20 @@ function Split-PkgManagerWords {
         $word = $Words[$i]
         if ($word -notmatch '^-') { $targets.Add($word); continue }
         $ignored.Add($word)
-        if ($word -in $script:PkgFlagCarriesTarget) {
-            if ($i + 1 -lt $Words.Count) { $i++; $targets.Add($Words[$i]) }
+
+        # Pages print both shapes: `--id Foo.Bar` and `--id=Foo.Bar`. The package is
+        # the value either way, so the attached form must not lose it.
+        $name = $word
+        $attached = ''
+        if ($word -match '^(--?[a-z-]+)=(.+)$') { $name = $Matches[1]; $attached = $Matches[2] }
+
+        if ($name -in $script:PkgFlagCarriesTarget) {
+            if ($attached) { $targets.Add($attached) }
+            elseif ($i + 1 -lt $Words.Count) { $i++; $targets.Add($Words[$i]) }
             continue
         }
-        if ($word -in $script:PkgFlagTakesValue -and
+        if ($attached) { continue }   # `--scope=user`: its value arrived with the '='
+        if ($name -in $script:PkgFlagTakesValue -and
             $i + 1 -lt $Words.Count -and $Words[$i + 1] -notmatch '^-') {
             $i++
         }
@@ -107,7 +116,7 @@ function Invoke-PkgManagerScoped {
     if ($verb -in 'i', 'install', 'add', 'a', 'get', 'u', 'uninstall', 'remove', 'rm', 'r', 'del', 'un') {
         $parts = Split-PkgManagerWords -Words $rest
         if ($parts.Ignored.Count) {
-            Write-PkgNote "[!] Ignored manager flags: $($parts.Ignored -join ' ') - pkg builds its own." 214
+            Write-PkgNote "[!] Ignored manager flags: $($parts.Ignored -join ' ')  (pkg builds its own)." 214
         }
     }
 
@@ -134,26 +143,43 @@ function Invoke-PkgManagerScoped {
             Start-PkgInstall -Manager $Manager
         }
         default {
-            # pkg has no opinion on this verb; the manager answers for itself
-            Write-PkgNote "[!] pkg does not wrap '$verb' - running it through $Manager directly." 245
+            # pkg has no opinion on this verb; the manager answers for itself.
+            # msstore is a winget source and has no executable of its own, so
+            # `pkg msstore list` is winget's to answer.
+            $exe = if ($Manager -eq 'msstore') { 'winget' } else { $Manager }
+            Write-PkgNote "[!] pkg does not wrap '$verb' - running it through $exe directly." 245
             Clear-PkgInputBuffer
             $argv = @($verb) + $rest
-            & $Manager @argv
+            & $exe @argv
             Clear-PkgInputBuffer
         }
     }
 }
 
+# `pkg` takes its arguments from $args rather than a param block, and that is a
+# deliberate choice rather than an oversight. A function that declares parameters is
+# an advanced function, which drags in the common parameters (-ErrorAction,
+# -Verbose, ...), and then a copied manager line fails inside PowerShell's own
+# binder before this function is entered:
+#
+#     pkg winget install -e --id Foo.Bar
+#     # Parameter cannot be processed because the parameter name 'e' is ambiguous.
+#     # Possible matches include: -ErrorAction -ErrorVariable.
+#
+# `-e`, `-v`, `-i`, `-a` and the rest of the manager's short flags collide the same
+# way. With no parameters there is no binder to disagree with: every word survives to
+# the router below, and Split-PkgManagerWords is the only parser in the path. The one
+# thing this gives up is parameter-name-based tab completion, which the -Native
+# registration at the bottom of this file replaces.
 function pkg {
     <# Unified package manager entry point (Scoop + Winget via fzf). #>
-    [CmdletBinding(PositionalBinding = $false)]
-    param(
-        [Parameter(Position = 0)]
-        [string]$Command = '',
+    $Command = if ($args.Count) { [string]$args[0] } else { '' }
+    $Arguments = @($args | Select-Object -Skip 1)
 
-        [Parameter(ValueFromRemainingArguments = $true, Position = 1)]
-        [string[]]$Arguments = @()
-    )
+    # Managers are probed once per command rather than once per session, so that
+    # installing Scoop or Winget here is visible to the very next `pkg`. Two
+    # Get-Command lookups per command is nothing beside the manager call after them.
+    Clear-PkgManagerCache
 
     # Pre-flight, once, at the door: everything but the usage text needs fzf and
     # python, and refusing here is clearer than failing partway through a TUI.
@@ -190,7 +216,7 @@ function pkg {
         '^(version|--version|-v)$' {
             Write-PkgNote "pkgmngr v$script:PkgMngrVersion" 39
         }
-        '^(h|help|\?|--help|-h)$' {
+        '^(h|help|\?|-\?|--help|-h)$' {
             Show-PkgHelp
         }
         default {
@@ -200,26 +226,36 @@ function pkg {
     }
 }
 
-# Tab completion for subcommands
-Register-ArgumentCompleter -CommandName pkg -ParameterName Command -ScriptBlock {
-    param($wordToComplete, [string]$commandAst, [string]$cursorPosition)
-    $subcommands = 'install', 'uninstall', 'update', 'upgrade', 'help', 'version', 'scoop', 'winget'
-    $subcommands |
-        Where-Object { $_ -like "$wordToComplete*" } |
-        ForEach-Object {
-            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
-        }
-}
+# Tab completion. -Native because the function has no parameters to hang a completer
+# on; the scriptblock is handed the whole command AST, so it works out which word the
+# cursor is in itself. The element containing the cursor is the one being completed,
+# and a cursor past the end of the line means a fresh word after the last element.
+$script:PkgSubcommands = 'install', 'uninstall', 'update', 'upgrade', 'help',
+                         'version', 'scoop', 'winget', 'msstore'
+# After `pkg scoop` / `pkg winget`: install and uninstall are pkg's own, the rest go
+# straight to the manager.
+$script:PkgManagerVerbs = 'install', 'uninstall', 'search', 'update', 'upgrade', 'list',
+                          'info', 'bucket', 'which', 'where', 'config', 'checkup', 'home', 'reset'
 
-# After `pkg scoop` / `pkg winget`, the verbs that router accepts; install and
-# uninstall are pkg's own, the rest are passed straight to the manager.
-Register-ArgumentCompleter -CommandName pkg -ParameterName Arguments -ScriptBlock {
+Register-ArgumentCompleter -Native -CommandName pkg -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $words = @($commandAst.CommandElements | ForEach-Object { $_.Extent.Text })
-    if ($words.Count -lt 2 -or $words[1] -notin 'scoop', 'winget', 'msstore') { return }
-    $verbs = 'install', 'uninstall', 'search', 'update', 'upgrade', 'list', 'info',
-              'bucket', 'which', 'where', 'config', 'checkup', 'home', 'reset'
-    $verbs |
+
+    $elements = @($commandAst.CommandElements)
+    $words = @($elements | ForEach-Object { $_.Extent.Text })
+    $index = $words.Count
+    for ($i = 0; $i -lt $elements.Count; $i++) {
+        if ($cursorPosition -le $elements[$i].Extent.EndOffset) { $index = $i; break }
+    }
+
+    $candidates = if ($index -eq 1) {
+        $script:PkgSubcommands
+    } elseif ($index -gt 1 -and $words.Count -gt 1 -and $words[1] -in 'scoop', 'winget', 'msstore') {
+        $script:PkgManagerVerbs
+    } else {
+        return
+    }
+
+    $candidates |
         Where-Object { $_ -like "$wordToComplete*" } |
         ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)

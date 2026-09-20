@@ -6,15 +6,11 @@
 $script:PkgScripts = Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts'
 $script:PkgHasGum = [bool](Get-Command gum -ErrorAction SilentlyContinue)
 
-# Keep python's piped stdout UTF-8 regardless of console code page (badges/ellipsis in catalog)
-$env:PYTHONIOENCODING = 'utf-8'
-
-# gum removes its ANSI styling whenever stdout is not a terminal, and every card
-# and note below is piped through Out-Host on purpose (see Write-PkgCard) - so
-# without this the whole UI renders in the terminal's default colour and only the
-# box shape survives. Measured on gum v2.0.1: 0 escape sequences piped, 6 per
-# text line with this set. FORCE_COLOR is ignored by this gum build.
-$env:CLICOLOR_FORCE = '1'
+# python is asked for UTF-8 so a catalog line never dies on UnicodeEncodeError while
+# encoding an accented application name. Left alone if the user set it first, and
+# this is the only environment change pkg makes to the session - CLICOLOR_FORCE, the
+# other one this file used to set globally, is now scoped to the gum call itself.
+if (-not $env:PYTHONIOENCODING) { $env:PYTHONIOENCODING = 'utf-8' }
 
 # The 256-color ids the library passes around, folded onto what a console host
 # without gum can actually render. Palette: winget cyan, scoop gold, msstore
@@ -30,6 +26,41 @@ function Get-PkgConsoleColor {
         245 { 'DarkGray' }
         default { 'Gray' }
     }
+}
+
+function Invoke-PkgStyled {
+    <#
+    .SYNOPSIS
+        Runs one `gum style` render and cleans up after it.
+    .DESCRIPTION
+        Two problems are handled here, both caused by gum behaving differently
+        when it is not attached to a terminal:
+
+        1. It strips its own ANSI in that case, and every card and note below is
+           piped through Out-Host on purpose (see Write-PkgCard) - so without
+           CLICOLOR_FORCE the whole UI renders in the default colour and only the
+           box shape survives. Measured on gum v2.0.1: 0 escape sequences piped,
+           6 per text line forced; FORCE_COLOR is ignored by this build. The
+           variable is set for this one process and removed straight away, because
+           leaving it set in a session sourced from $PROFILE would make git and
+           every other tool there colour their redirected output as well.
+        2. It writes a terminal capability probe (\e[?2027;0$y) back into the
+           input buffer, which otherwise surfaces as garbage in front of the next
+           thing the user types. Flushing after each render is what keeps the last
+           card of a run from poisoning the following prompt.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string[]]$StyleArgs,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
+    )
+    try {
+        $env:CLICOLOR_FORCE = '1'
+        $gumArgs = $StyleArgs + @('--', $Text)
+        & gum @gumArgs
+    } finally {
+        Remove-Item Env:CLICOLOR_FORCE -ErrorAction SilentlyContinue
+    }
+    Clear-PkgInputBuffer
 }
 
 function Write-PkgCard {
@@ -59,7 +90,7 @@ function Write-PkgCard {
             '--padding', '0 2', '--margin', '1 0'
         )
         if ($Bold) { $styleArgs += '--bold' }
-        gum @styleArgs -- $Text | Out-Host
+        Invoke-PkgStyled -StyleArgs $styleArgs -Text $Text | Out-Host
     } else {
         Write-Host $Text -ForegroundColor (Get-PkgConsoleColor -Id $Color)
     }
@@ -74,7 +105,7 @@ function Write-PkgNote {
         [int]$Color = 245
     )
     if ($script:PkgHasGum) {
-        gum style --foreground $Color -- $Text | Out-Host
+        Invoke-PkgStyled -StyleArgs @('style', '--foreground', $Color) -Text $Text | Out-Host
     } else {
         Write-Host $Text -ForegroundColor (Get-PkgConsoleColor -Id $Color)
     }
@@ -356,17 +387,21 @@ function Show-PkgResultCard {
         [Parameter(Mandatory = $true)]
         [int]$Ok,
         [AllowEmptyCollection()]
-        [string[]]$Failed = @()
+        [string[]]$Failed = @(),
+        # Asked and answered 'no': counted in the total, coloured amber, never a
+        # failure - the manager was never invoked, so blaming one would be wrong.
+        [int]$Declined = 0
     )
-    $total = $Ok + $Failed.Count
-    if ($Failed.Count -eq 0) {
+    $total = $Ok + $Failed.Count + $Declined
+    if ($Failed.Count -eq 0 -and $Declined -eq 0) {
         Write-PkgCard "$Verb $total of $total package(s)." -Color 42 -Bold
         return
     }
     # Partial success is amber, total failure red
     $color = if ($Ok) { 214 } else { 203 }
-    $detail = ($Failed | ForEach-Object { "  x $_" }) -join "`n"
-    Write-PkgCard "$Verb $Ok of $total package(s):`n$detail" -Color $color -Bold
+    $detail = @($Failed | ForEach-Object { "  x $_" })
+    if ($Declined) { $detail += "  - $Declined declined" }
+    Write-PkgCard "$Verb $Ok of $total package(s):`n$($detail -join "`n")" -Color $color -Bold
 }
 
 function Select-PkgActionableLines {

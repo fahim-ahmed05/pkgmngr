@@ -24,11 +24,24 @@ function Show-PkgRunOutcome {
 }
 
 function Update-PkgScoopIndex {
-    <# Rebuilds the Scoop manifest index that Get-Catalog.py reads. #>
-    if (-not (Test-PkgManager -Manager 'scoop')) { return }
+    <#
+    .SYNOPSIS
+        Rebuilds the Scoop manifest index that Get-Catalog.py reads.
+    .DESCRIPTION
+        Answers whether the index is usable afterwards. Worth asking for: the index
+        is the difference between a 200 ms catalog and a 1.3 s one, and a run that
+        finished green while the indexer threw would be lying about itself. An
+        unrunnable indexer is the one failure no manager printed a word about.
+    #>
+    if (-not (Test-PkgManager -Manager 'scoop')) { return $true }   # nothing to index
     $indexer = Join-Path $script:PkgScripts 'Update-ScoopIndex.ps1'
-    if (Test-Path $indexer) {
+    if (-not (Test-Path $indexer)) { return $true }
+    try {
         & $indexer | Out-Host
+        return $true
+    } catch {
+        Write-PkgNote "[-] Scoop index could not be rebuilt: $($_.Exception.Message)" 203
+        return $false
     }
 }
 
@@ -64,7 +77,7 @@ function Update-PkgSources {
         $skipped.Add('scoop')
     }
 
-    Update-PkgScoopIndex
+    if (-not (Update-PkgScoopIndex)) { $failed.Add('scoop index') }
 
     Show-PkgRunOutcome -SuccessText 'Package sources updated successfully!' `
         -Failed $failed.ToArray() -Skipped $skipped.ToArray()
@@ -123,7 +136,7 @@ function Update-PkgAll {
         # outdated or broken, and that table is the report - not a failure.
         Invoke-PkgManagerCommand -Label 'scoop status' -Command { scoop status }
 
-        Update-PkgScoopIndex
+        if (-not (Update-PkgScoopIndex)) { $failed.Add('scoop index') }
     } else {
         $skipped.Add('scoop')
     }

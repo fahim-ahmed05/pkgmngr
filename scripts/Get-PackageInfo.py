@@ -1,33 +1,127 @@
 import sys
 import re
 import os
+import io
 import json
+import time
 import glob
+import hashlib
 import subprocess
+import contextlib
+
+# fzf reads the preview as UTF-8; never let an odd character in a description cost
+# the whole render.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+# The preview is re-rendered every time the cursor comes to rest, and the two
+# renderers below cost about a second each - `winget show` because it queries the
+# source, `scoop info` because it starts an interpreter. Hovering over one package
+# twice should not cost twice, so renders are replayed from a short-lived cache.
+# Short TTL by design: a package's advertised version does change, and these files
+# are disposable - cache/ is gitignored and deleting it costs only time.
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'cache', 'preview')
+CACHE_TTL = 900
+
+
+def cache_file(key):
+    """Where a render of `key` lives, or '' if the cache cannot be used at all."""
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        return os.path.join(CACHE_DIR, hashlib.sha1(key.encode('utf-8')).hexdigest() + '.txt')
+    except OSError:
+        return ''
+
+
+def prune_cache():
+    """Drop expired entries, so a long-lived session cannot grow this folder forever."""
+    cutoff = time.time() - CACHE_TTL
+    try:
+        names = os.listdir(CACHE_DIR)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(CACHE_DIR, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            continue
+
+
+def cached_render(key, render):
+    """Run `render`, or replay its output if it ran recently enough.
+
+    The renderer answers True when its output is worth replaying. A miss is not: `no
+    package found` may just as well be the source being unreachable a moment ago, and
+    storing that would keep a wrong answer on screen for the whole life of the cache.
+
+    Any cache problem is a reason to render, never a reason to show nothing: the
+    worst case here is the speed of having no cache at all.
+    """
+    path = cache_file(key)
+    if path:
+        try:
+            if os.path.isfile(path) and time.time() - os.path.getmtime(path) < CACHE_TTL:
+                with open(path, 'r', encoding='utf-8') as f:
+                    body = f.read()
+                if body:
+                    sys.stdout.write(body)
+                    return
+        except OSError:
+            pass
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        worth_keeping = render()
+    body = buf.getvalue()
+    sys.stdout.write(body)
+    sys.stdout.flush()
+    if path and body and worth_keeping:
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(body)
+            prune_cache()
+        except OSError:
+            pass
+
+
+def scoop_root():
+    """Where Scoop keeps its buckets - the same rule every other script follows.
+
+    Hardcoding a home-relative scoop folder made the preview silently fall through
+    to `scoop info` (a second and a half) on any machine with Scoop elsewhere, for
+    instance a scoop folder on another drive.
+    """
+    env = os.environ.get('SCOOP')
+    if env:
+        return env.rstrip('\\/')
+    # Only the POSIX-ish home from PowerShell; python's own expanduser is fine here too
+    return os.path.join(os.path.expanduser('~'), 'scoop')
+
 
 def get_scoop_info(bucket, pkg):
-    user_home = os.path.expanduser('~')
+    root = scoop_root()
     manifest = None
     app_name = pkg
 
     if bucket:
-        direct_path = os.path.join(user_home, 'scoop', 'buckets', bucket, 'bucket', f'{app_name}.json')
+        direct_path = os.path.join(root, 'buckets', bucket, 'bucket', f'{app_name}.json')
         if os.path.exists(direct_path):
             manifest = direct_path
     if not manifest:
-        installed_path = os.path.join(user_home, 'scoop', 'apps', app_name, 'current', 'manifest.json')
+        installed_path = os.path.join(root, 'apps', app_name, 'current', 'manifest.json')
         if os.path.exists(installed_path):
             manifest = installed_path
         else:
             # Check most common buckets before disk glob
             for b in ('main', 'extras', 'versions', 'nirsoft', 'sysinternals', 'nerd-fonts'):
-                cand = os.path.join(user_home, 'scoop', 'buckets', b, 'bucket', f'{app_name}.json')
+                cand = os.path.join(root, 'buckets', b, 'bucket', f'{app_name}.json')
                 if os.path.exists(cand):
                     manifest = cand
                     bucket = b
                     break
             if not manifest:
-                candidates = glob.glob(os.path.join(user_home, 'scoop', 'buckets', '*', 'bucket', f'{app_name}.json'))
+                candidates = glob.glob(os.path.join(root, 'buckets', '*', 'bucket', f'{app_name}.json'))
                 if candidates:
                     manifest = candidates[0]
                     if not bucket:
@@ -52,7 +146,7 @@ def get_scoop_info(bucket, pkg):
             reset = f'{esc}[0m'
 
             header = f'{bold}{yellow}{app_name}{reset}'
-            sub = f'{dim}scoop' + (f' ({bucket})' if bucket else '') + (f' • v{ver}' if ver else '') + f'{reset}'
+            sub = f'{dim}scoop' + (f' ({bucket})' if bucket else '') + (f' - v{ver}' if ver else '') + f'{reset}'
             print(f'{header}\n{sub}\n')
             if desc:
                 print(f'{bold}Description:{reset}\n{desc}\n')
@@ -64,13 +158,27 @@ def get_scoop_info(bucket, pkg):
                 if isinstance(notes, list):
                     notes = '\n'.join(notes)
                 print(f'\n{dim}Notes:{reset}\n{notes}')
-            return
+            # A manifest read is instant and cannot be wrong in a way that matters
+            # next time, so it is worth keeping.
+            return True
         except Exception:
             pass
 
-    # Fallback to scoop info command if manifest reading failed
+    # Fallback to scoop info when no manifest could be read. Scoop is a .cmd, and a
+    # batch file only resolves through a shell, so this call keeps shell=True and
+    # list2cmdline does the quoting; the output is captured and re-printed so the
+    # preview cache below can see it (a direct write would bypass the capture).
     target = f'{bucket}/{pkg}' if bucket else pkg
-    subprocess.run(['scoop', 'info', target], shell=True)
+    cmd = 'scoop info ' + subprocess.list2cmdline([target])
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                              encoding='utf-8', errors='replace')
+        print((proc.stdout or '') + (proc.stderr or ''))
+    except Exception as e:
+        print(f'scoop info failed: {e}')
+    # Nothing here is safe to replay: this branch is also the one that runs when the
+    # package does not exist, and its error text is the whole output.
+    return False
 
 def get_winget_info(mgr, pkg):
     esc = '\x1b'
@@ -83,21 +191,31 @@ def get_winget_info(mgr, pkg):
     if pkg.startswith('MSIX\\') or pkg.startswith('ARP\\'):
         pkg_type = "MSIX Application" if pkg.startswith("MSIX") else "Installed Application (ARP)"
         print(f'{bold}{cyan}{pkg}{reset}')
-        print(f'{dim}winget • local Windows package{reset}\n')
+        print(f'{dim}winget - local Windows package{reset}\n')
         print(f'{dim}Type      :{reset} {pkg_type}')
         print(f'{dim}Identifier:{reset} {pkg}')
-        return
+        # Already instant, so caching it would only risk showing a stale name
+        return False
 
     cmd = ['winget', 'show', '-e', '--id', pkg]
     if mgr:
         cmd.extend(['--source', mgr])
     cmd.append('--accept-source-agreements')
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+    # winget.exe resolves without a shell, so none is started: a shell would re-parse
+    # metacharacters in text that came out of a manifest. UTF-8 is stated explicitly
+    # because winget emits it while the default decode follows the locale codepage.
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', shell=False)
     if proc.returncode != 0 or not proc.stdout.strip():
-        if proc.stderr:
-            print(proc.stderr.strip())
-        return
+        # Winget explains a miss on stdout ("No package found matching input
+        # criteria.") and a hard failure on stderr. Showing only stderr left the
+        # preview pane an empty rectangle with the reason sitting right next to it
+        # unread, so: whatever spoke, say it back.
+        message = (proc.stdout or '').strip() or (proc.stderr or '').strip()
+        if message:
+            print(message)
+        return False
 
     out = proc.stdout
     info = {}
@@ -137,7 +255,7 @@ def get_winget_info(mgr, pkg):
     lic = info.get('License', '')
 
     print(f'{bold}{cyan}{title}{reset}')
-    print(f'{dim}winget ({mgr}) • {pkg}' + (f' • v{ver}' if ver else '') + f'{reset}\n')
+    print(f'{dim}winget ({mgr}) - {pkg}' + (f' - v{ver}' if ver else '') + f'{reset}\n')
 
     if desc:
         print(f'{bold}Description:{reset}\n{desc}\n')
@@ -150,6 +268,8 @@ def get_winget_info(mgr, pkg):
     if tags:
         tag_str = ', '.join(tags)
         print(f'{dim}Tags      :{reset} {tag_str}')
+    # A full render off a live source query: exactly the second of work worth saving.
+    return True
 
 def main():
     if len(sys.argv) < 2:
@@ -161,13 +281,13 @@ def main():
     if clean_line.startswith('scoop:'):
         target = clean_line[6:]
         bucket, app = target.split('/', 1) if '/' in target else ('', target)
-        get_scoop_info(bucket, app)
+        cached_render(clean_line, lambda: get_scoop_info(bucket, app))
         return
     elif clean_line.startswith('winget:'):
-        get_winget_info('winget', clean_line[7:])
+        cached_render(clean_line, lambda: get_winget_info('winget', clean_line[7:]))
         return
     elif clean_line.startswith('msstore:'):
-        get_winget_info('msstore', clean_line[8:])
+        cached_render(clean_line, lambda: get_winget_info('msstore', clean_line[8:]))
         return
 
     # Fallback for bracketed lines [mgr:source] pkg
@@ -179,10 +299,10 @@ def main():
 
     if badge.startswith('scoop'):
         bucket = badge.split(':', 1)[1] if ':' in badge else ''
-        get_scoop_info(bucket, pkg)
+        cached_render(clean_line, lambda: get_scoop_info(bucket, pkg))
     elif badge.startswith('winget') or badge.startswith('msstore'):
         source = badge.split(':', 1)[1] if ':' in badge else 'winget'
-        get_winget_info(source, pkg)
+        cached_render(clean_line, lambda: get_winget_info(source, pkg))
 
 if __name__ == '__main__':
     main()

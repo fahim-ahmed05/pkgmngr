@@ -5,20 +5,23 @@
 
 function Get-PkgCatalog {
     <# Loads the combined Scoop + Winget catalog as tab-separated fzf lines. #>
-    param([switch]$Quiet)
     $scriptPath = Join-Path $script:PkgScripts 'Get-Catalog.py'
 
     # Resolve Winget's native index.db here - PowerShell can enumerate WindowsApps, plain Python cannot
     $wingetDb = Get-Item "$env:ProgramFiles\WindowsApps\Microsoft.Winget.Source_*\Public\index.db" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName
 
-    $lines = if ($script:PkgHasGum -and -not $Quiet) {
+    # The spinner is deliberately not colour-forced: gum's --show-stdout forwards the
+    # child's stdout through this same pipe, and nothing must risk leaking escape
+    # sequences into the catalog lines that the next function parses.
+    $lines = if ($script:PkgHasGum) {
         gum spin --spinner dot --spinner.foreground 214 `
             --title "Loading package catalog..." --title.foreground 245 --show-stdout -- `
             python $scriptPath $wingetDb
     } else {
         python $scriptPath $wingetDb
     }
+    Clear-PkgInputBuffer
     return @($lines | Where-Object { $_ })
 }
 
@@ -72,7 +75,9 @@ function Show-PkgPicker {
         '--info=inline-right',
         '--preview-window=right:50%:hidden:wrap-word,<100(down:50%:hidden:wrap-word)',
         '--preview-wrap-sign=',
-        "--preview=python `"$previewScript`" {1}",
+        # Quoted because fzf hands this to a shell: field 1 is a raw 'manager:id'
+        # target, and an unquoted one would break on a name holding a metacharacter.
+        "--preview=python `"$previewScript`" `"{1}`"",
         '--bind=?:toggle-preview',
         "--color=prompt:$accent,pointer:$accent,marker:$accent,spinner:$accent,border:238,header:245,info:245,fg:252,fg+:252"
     )

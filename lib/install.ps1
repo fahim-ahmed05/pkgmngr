@@ -144,15 +144,15 @@ function Start-PkgInstall {
     foreach ($raw in $selected) {
         if ($raw -match '^scoop:(?<bucket>[^/]+)/(?<pkg>.+)$') {
             $targets.Add("scoop:$($Matches['bucket'])/$($Matches['pkg'])")
-            $summary.Add("  • [scoop:$($Matches['bucket'])] $($Matches['pkg'])")
+            $summary.Add("  - [scoop:$($Matches['bucket'])] $($Matches['pkg'])")
         }
         elseif ($raw -match '^winget:(?<id>.+)$') {
             $targets.Add("winget:$($Matches['id'])")
-            $summary.Add("  • [winget:winget] $($Matches['id'])")
+            $summary.Add("  - [winget:winget] $($Matches['id'])")
         }
         else {
             $targets.Add($raw)
-            $summary.Add("  • $raw")
+            $summary.Add("  - $raw")
         }
     }
 

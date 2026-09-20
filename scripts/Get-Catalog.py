@@ -9,6 +9,7 @@ import sys
 import os
 import json
 import glob
+import pathlib
 import sqlite3
 
 ESC = '\x1b'
@@ -17,9 +18,27 @@ S_COLOR = f'{ESC}[38;5;214m'  # scoop gold
 DIM = f'{ESC}[38;5;245m'
 RESET = f'{ESC}[0m'
 
+# Application names carry accents and emoji, and a catalog that dies halfway through
+# encoding one is a catalog missing its second half. Both streams are stated, not
+# inherited: `pkg` sets PYTHONIOENCODING, running this file by hand need not.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+
+def warn(msg):
+    """Say what failed, on stderr.
+
+    PowerShell shows stderr to the user but never feeds it into the captured
+    catalog, so a half-loaded catalog cannot pass for a complete one - which is
+    what happened while both halves just returned False in silence.
+    """
+    print(f'[pkg] {msg}', file=sys.stderr)
+
 
 def trunc(s, max_len):
-    return s[:max_len - 1] + '…' if len(s) > max_len else s
+    # '~' rather than an ellipsis: the display column is decoded by the console's
+    # own code page on the way to fzf, so every glyph pkg adds is kept ASCII.
+    return s[:max_len - 1] + '~' if len(s) > max_len else s
 
 
 def find_winget_db(cli_path=''):
@@ -56,12 +75,18 @@ def emit_scoop_index(path, lines):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        out = []
         for bucket, bval in data.items():
             if isinstance(bval, dict) and 'packages' in bval:
                 for pkg, ver in bval['packages'].items():
-                    lines.append(scoop_line(bucket, pkg, ver))
+                    out.append(scoop_line(bucket, pkg, ver))
+        # Extended only once the whole file has survived: appending as it went and
+        # then failing halfway left the caller to add the bucket scan on top,
+        # duplicating every package that had already been emitted.
+        lines.extend(out)
         return True
-    except Exception:
+    except Exception as e:
+        warn(f'Scoop index unusable ({type(e).__name__}: {e}) - reading bucket manifests instead')
         return False
 
 
@@ -90,16 +115,30 @@ def emit_scoop_buckets(lines):
     return found
 
 
+def scoop_installed():
+    """Whether this machine claims a Scoop install, so an empty Scoop half matters."""
+    if os.environ.get('SCOOP'):
+        return True
+    return os.path.isdir(os.path.join(os.path.expanduser('~'), 'scoop', 'buckets'))
+
+
 def emit_winget(lines, cli_path=''):
     db = find_winget_db(cli_path)
     if not db:
+        warn('winget source index not found - run `pkg update`, or install winget entries by id')
         return False
+    conn = None
     try:
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.execute('SELECT id, name, latest_version FROM packages;')
+        # Read-only and patient: `pkg update` leaves winget rewriting this file, and
+        # a write-mode connection with the default zero busy timeout fails at once
+        # instead of reading the last good copy. Closed in all paths, because the
+        # handle is one winget would rather not have held against it.
+        uri = f'file:{pathlib.Path(db).as_posix()}?mode=ro'
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute('PRAGMA busy_timeout=4000')
+        rows = conn.execute('SELECT id, name, latest_version FROM packages;').fetchall()
         badge = f'{W_COLOR}[winget:winget]{RESET}'
-        for pkg_id, name, ver in c:
+        for pkg_id, name, ver in rows:
             v = ver or ''
             n = name or ''
             disp_id = trunc(pkg_id, 40)
@@ -108,10 +147,13 @@ def emit_winget(lines, cli_path=''):
             raw = f'winget:{pkg_id}'
             disp = f'{badge}     {disp_id:<40}  {disp_ver:<16}{desc_str}'
             lines.append(f'{raw}\t{disp}')
-        conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        warn(f'winget index unreadable ({type(e).__name__}: {e}) - showing Scoop entries only')
         return False
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def main():
@@ -121,11 +163,21 @@ def main():
     index = find_scoop_index()
     ok = emit_scoop_index(index, lines) if index else False
     if not ok:
+        # The bucket scan is ten times the cost of the index, and silent about it.
+        if not index:
+            warn('no Scoop index yet - reading bucket manifests instead; `pkg update` builds the fast one')
         emit_scoop_buckets(lines)
 
+    scoop_count = len(lines)
     emit_winget(lines, winget_db)
 
-    sys.stdout.reconfigure(encoding='utf-8')
+    # A machine without Scoop has nothing for that half to report, so silence there is
+    # right; one that has Scoop and still yielded no entries is the failure worth saying.
+    if scoop_count == 0 and scoop_installed():
+        warn('no Scoop packages could be listed - run `pkg update` to build the index')
+    if not lines:
+        warn('catalog is empty - nothing can be offered')
+
     sys.stdout.write('\n'.join(lines) + '\n')
 
 

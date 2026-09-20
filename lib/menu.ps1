@@ -18,7 +18,8 @@ USAGE
     pkg help                  Show this help
 
 ALIASES
-    install: i, add, a        uninstall: u, rm, remove, r
+    install: i, add, a, get, search    uninstall: u, rm, remove, r, del
+    update: sync, sources, refresh     upgrade: up                help: h, ?
 
 EXAMPLES
     pkg install chrome        Open fzf pre-filtered to 'chrome'
@@ -39,6 +40,8 @@ ONE MANAGER ONLY (paste-ready)
                               Same through Winget; manager flags are ignored
     pkg scoop search          Fzf over Scoop entries only (also: uninstall, rm)
     pkg winget list           Verbs pkg does not wrap run the manager itself
+    pkg msstore install 9WZDNCRFJB4M
+                              A Store id installs through winget's msstore source
 
 FZF SHORTCUTS
     Tab select | Shift-Tab up-select | Enter confirm | ? toggle info | Esc cancel

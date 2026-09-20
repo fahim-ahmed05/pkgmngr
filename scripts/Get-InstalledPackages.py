@@ -3,25 +3,39 @@ import sys
 import json
 import subprocess
 
+# The report itself goes out as ASCII-safe JSON, but a warning carries whatever path or
+# manager message upset it, and a locale codepage can fail to encode that.
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+
+def warn(msg):
+    """One line for the user, on stderr, which PowerShell shows and the JSON parse ignores."""
+    print(f'[pkg] {msg}', file=sys.stderr)
+
+
 def get_installed_packages(query=""):
-    query_str = query.strip()
-    query_lower = query_str.lower()
+    query_lower = query.strip().lower()
 
     # 1. Start Winget in background
+    #
+    # The query is deliberately not handed to winget. Measured here, `winget list`
+    # with a search term took 2.3 to 6.1 seconds against 2.2 for the whole list, so
+    # filtering remotely buys no time at all - while its own match rules would hide
+    # rows the substring filter below is happier about, and a term starting with '-'
+    # would arrive as a switch. One list, one parser, one cost.
     cmd = ['winget', 'list', '--accept-source-agreements']
-    if query_str:
-        cmd.append(query_str)
-    
+
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding='utf-8',
             errors='ignore'
         )
-    except Exception:
+    except Exception as e:
+        warn(f'winget could not be started ({type(e).__name__}: {e}) - listing Scoop apps only')
         proc = None
 
     # 2. Fast local Scoop scan (<15ms)
@@ -88,7 +102,12 @@ def get_installed_packages(query=""):
     # 3. Collect Winget output
     winget_packages = []
     if proc:
-        stdout_data, _ = proc.communicate()
+        stdout_data, stderr_data = proc.communicate()
+        if proc.returncode not in (0, None):
+            # Without this a failed 'winget list' looked exactly like an empty machine,
+            # and the caller's "nothing matches" note sent people hunting in the registry.
+            reason = (stderr_data or '').strip().splitlines()
+            warn(f"winget list exited {proc.returncode}" + (f': {reason[0]}' if reason else ''))
         lines = stdout_data.splitlines()
         header_idx = -1
         for i, line in enumerate(lines):
@@ -101,6 +120,10 @@ def get_installed_packages(query=""):
             id_pos = header.find('Id')
             ver_pos = header.find('Version')
             src_pos = header.find('Source')
+            ap_pos = header.find('Available')
+            # When an upgrade is pending winget prints an 'Available' column between
+            # Version and Source; slicing to Source would glue the two values together.
+            ver_end = ap_pos if 0 < ap_pos < src_pos else src_pos
 
             for line in lines[header_idx + 2:]:
                 if not line.strip():
@@ -109,7 +132,7 @@ def get_installed_packages(query=""):
                 pkg_id = line[id_pos:ver_pos].strip() if ver_pos > id_pos else line[id_pos:].strip()
                 if not pkg_id:
                     continue
-                ver = line[ver_pos:src_pos].strip() if (src_pos > ver_pos and ver_pos > 0) else (line[ver_pos:].strip() if ver_pos > 0 else '')
+                ver = line[ver_pos:ver_end].strip() if (ver_end > ver_pos and ver_pos > 0) else (line[ver_pos:].strip() if ver_pos > 0 else '')
                 src = line[src_pos:].strip() if (src_pos > 0 and len(line) > src_pos) else ''
                 mgr = 'msstore' if 'msstore' in src.lower() else 'winget'
 

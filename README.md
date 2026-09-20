@@ -138,10 +138,10 @@ pkgmngr/
 │   ├── update.ps1                   # source sync and full upgrade pipeline
 │   └── menu.ps1                     # bare-`pkg` fzf action menu + help card
 └── scripts/
-    ├── Get-Catalog.py               # merges Scoop index/buckets + Winget SQLite index.db (~140ms)
+    ├── Get-Catalog.py               # merges Scoop index/buckets + Winget SQLite index.db (~200ms)
     ├── Update-ScoopIndex.ps1        # builds the Scoop manifest index (incremental by bucket hash)
-    ├── Get-InstalledPackages.py     # parallel resolver: scoop dir scan + winget list (<1s)
-    └── Get-PackageInfo.py           # on-demand metadata preview for fzf `?`
+    ├── Get-InstalledPackages.py     # scoop dir scan while winget list runs (~2s, winget dominates)
+    └── Get-PackageInfo.py           # on-demand metadata preview for fzf `?`, cached 15 minutes
 ```
 
 - Catalog reads Winget's native SQLite source cache directly - no scraping, no daemons.
@@ -159,6 +159,9 @@ pkgmngr/
   `pkg help` and `pkg version` always work.
 - PowerShell resolves the `WindowsApps` path and hands it to Python (plain Python lacks
   directory-list rights there).
+- The installed-app list is filtered here, not by winget: `winget list <query>` costs 2.3
+  to 6.1 seconds against 2.2 for the whole list, so the whole list is what is read and the
+  query is applied to it locally.
 - Terminal input buffers are flushed after gum/fzf runs so leftover capability probes
   (`\e[?2027;0$y`) never pollute the next prompt.
 - The launch menu is fzf-based, not `gum choose`: gum centers its list in a viewport whose
@@ -168,9 +171,15 @@ pkgmngr/
   its text with the same id; without gum installed the ids fold onto the console's own
   eight colors.
 - gum strips its ANSI whenever stdout is not a terminal, and every card here is piped
-  through `Out-Host` on purpose - so `$env:CLICOLOR_FORCE = '1'` is set at load. Without
-  it the boxes render in the default color and only the shape survives (measured on gum
-  v2.0.1: 0 escape sequences piped, 6 per text line forced).
+  through `Out-Host` on purpose - so `CLICOLOR_FORCE=1` is set around each `gum` call and
+  removed again straight after it. Without it the boxes render in the default color and
+  only the shape survives (measured on gum v2.0.1: 0 escape sequences piped, 6 per text
+  line forced). Setting it at load instead would colour the redirected output of every
+  other tool in a profile-sourced session too; `$env:PYTHONIOENCODING=utf-8` is the one
+  variable pkg does leave set, and only when it was empty.
+- `?` previews are cached in `cache/preview/` for 15 minutes, because `winget show` costs
+  about a second and fzf re-renders the preview every time the cursor stops. A miss is
+  never cached - a source that was unreachable a moment ago should not stay wrong.
 - A failed manager command is reported once, by name, on the result or summary card.
   Winget and Scoop have already printed the reason in words, so pkg does not repeat it as
   a bare exit code; codes that only mean "nothing to do" (`0x8A150014`, `0x8A15002B`) are
@@ -184,8 +193,9 @@ pwsh -File "$HOME\Git\pkgmngr\setup.ps1" -Remove   # removes the source line, th
 
 Saying no leaves the clone alone - delete the folder yourself whenever you like.
 Tools installed through Scoop or Winget are never removed by pkgmngr, and nothing
-else is written anywhere: the generated `cache/` folder inside the clone is the only
-file pkg creates outside your profile.
+else is written anywhere: the generated `cache/` folder inside the clone - the Scoop
+index and the preview cache, both safe to delete - is the only file pkg creates
+outside your profile.
 
 ## License
 
