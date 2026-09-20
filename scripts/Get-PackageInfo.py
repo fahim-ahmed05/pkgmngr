@@ -105,27 +105,32 @@ def get_scoop_info(bucket, pkg):
     app_name = pkg
 
     if bucket:
-        direct_path = os.path.join(root, 'buckets', bucket, 'bucket', f'{app_name}.json')
+        direct_path = os.path.join(
+            root, 'buckets', bucket, 'bucket', f'{app_name}.json')
         if os.path.exists(direct_path):
             manifest = direct_path
     if not manifest:
-        installed_path = os.path.join(root, 'apps', app_name, 'current', 'manifest.json')
+        installed_path = os.path.join(
+            root, 'apps', app_name, 'current', 'manifest.json')
         if os.path.exists(installed_path):
             manifest = installed_path
         else:
             # Check most common buckets before disk glob
             for b in ('main', 'extras', 'versions', 'nirsoft', 'sysinternals', 'nerd-fonts'):
-                cand = os.path.join(root, 'buckets', b, 'bucket', f'{app_name}.json')
+                cand = os.path.join(root, 'buckets', b,
+                                    'bucket', f'{app_name}.json')
                 if os.path.exists(cand):
                     manifest = cand
                     bucket = b
                     break
             if not manifest:
-                candidates = glob.glob(os.path.join(root, 'buckets', '*', 'bucket', f'{app_name}.json'))
+                candidates = glob.glob(os.path.join(
+                    root, 'buckets', '*', 'bucket', f'{app_name}.json'))
                 if candidates:
                     manifest = candidates[0]
                     if not bucket:
-                        bucket = os.path.basename(os.path.dirname(os.path.dirname(manifest)))
+                        bucket = os.path.basename(
+                            os.path.dirname(os.path.dirname(manifest)))
 
     if manifest and os.path.exists(manifest):
         try:
@@ -146,7 +151,8 @@ def get_scoop_info(bucket, pkg):
             reset = f'{esc}[0m'
 
             header = f'{bold}{yellow}{app_name}{reset}'
-            sub = f'{dim}scoop' + (f' ({bucket})' if bucket else '') + (f' - v{ver}' if ver else '') + f'{reset}'
+            sub = f'{dim}scoop' + (f' ({bucket})' if bucket else '') + \
+                (f' - v{ver}' if ver else '') + f'{reset}'
             print(f'{header}\n{sub}\n')
             if desc:
                 print(f'{bold}Description:{reset}\n{desc}\n')
@@ -180,6 +186,7 @@ def get_scoop_info(bucket, pkg):
     # package does not exist, and its error text is the whole output.
     return False
 
+
 def get_winget_info(mgr, pkg):
     esc = '\x1b'
     bold = f'{esc}[1m'
@@ -189,7 +196,8 @@ def get_winget_info(mgr, pkg):
 
     # Instant inspection for local MSIX or ARP packages (avoids slow network query timeout)
     if pkg.startswith('MSIX\\') or pkg.startswith('ARP\\'):
-        pkg_type = "MSIX Application" if pkg.startswith("MSIX") else "Installed Application (ARP)"
+        pkg_type = "MSIX Application" if pkg.startswith(
+            "MSIX") else "Installed Application (ARP)"
         print(f'{bold}{cyan}{pkg}{reset}')
         print(f'{dim}winget - local Windows package{reset}\n')
         print(f'{dim}Type      :{reset} {pkg_type}')
@@ -255,7 +263,8 @@ def get_winget_info(mgr, pkg):
     lic = info.get('License', '')
 
     print(f'{bold}{cyan}{title}{reset}')
-    print(f'{dim}winget ({mgr}) - {pkg}' + (f' - v{ver}' if ver else '') + f'{reset}\n')
+    print(f'{dim}winget ({mgr}) - {pkg}' +
+          (f' - v{ver}' if ver else '') + f'{reset}\n')
 
     if desc:
         print(f'{bold}Description:{reset}\n{desc}\n')
@@ -271,6 +280,7 @@ def get_winget_info(mgr, pkg):
     # A full render off a live source query: exactly the second of work worth saving.
     return True
 
+
 def main():
     if len(sys.argv) < 2:
         return
@@ -284,10 +294,12 @@ def main():
         cached_render(clean_line, lambda: get_scoop_info(bucket, app))
         return
     elif clean_line.startswith('winget:'):
-        cached_render(clean_line, lambda: get_winget_info('winget', clean_line[7:]))
+        cached_render(clean_line, lambda: get_winget_info(
+            'winget', clean_line[7:]))
         return
     elif clean_line.startswith('msstore:'):
-        cached_render(clean_line, lambda: get_winget_info('msstore', clean_line[8:]))
+        cached_render(clean_line, lambda: get_winget_info(
+            'msstore', clean_line[8:]))
         return
 
     # Fallback for bracketed lines [mgr:source] pkg
@@ -303,6 +315,7 @@ def main():
     elif badge.startswith('winget') or badge.startswith('msstore'):
         source = badge.split(':', 1)[1] if ':' in badge else 'winget'
         cached_render(clean_line, lambda: get_winget_info(source, pkg))
+
 
 if __name__ == '__main__':
     main()

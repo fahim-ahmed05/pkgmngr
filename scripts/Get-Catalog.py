@@ -86,7 +86,8 @@ def emit_scoop_index(path, lines):
         lines.extend(out)
         return True
     except Exception as e:
-        warn(f'Scoop index unusable ({type(e).__name__}: {e}) - reading bucket manifests instead')
+        warn(
+            f'Scoop index unusable ({type(e).__name__}: {e}) - reading bucket manifests instead')
         return False
 
 
@@ -136,7 +137,8 @@ def emit_winget(lines, cli_path=''):
         uri = f'file:{pathlib.Path(db).as_posix()}?mode=ro'
         conn = sqlite3.connect(uri, uri=True)
         conn.execute('PRAGMA busy_timeout=4000')
-        rows = conn.execute('SELECT id, name, latest_version FROM packages;').fetchall()
+        rows = conn.execute(
+            'SELECT id, name, latest_version FROM packages;').fetchall()
         badge = f'{W_COLOR}[winget:winget]{RESET}'
         for pkg_id, name, ver in rows:
             v = ver or ''
@@ -149,7 +151,8 @@ def emit_winget(lines, cli_path=''):
             lines.append(f'{raw}\t{disp}')
         return True
     except Exception as e:
-        warn(f'winget index unreadable ({type(e).__name__}: {e}) - showing Scoop entries only')
+        warn(
+            f'winget index unreadable ({type(e).__name__}: {e}) - showing Scoop entries only')
         return False
     finally:
         if conn is not None:

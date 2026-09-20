@@ -35,7 +35,8 @@ def get_installed_packages(query=""):
             errors='ignore'
         )
     except Exception as e:
-        warn(f'winget could not be started ({type(e).__name__}: {e}) - listing Scoop apps only')
+        warn(
+            f'winget could not be started ({type(e).__name__}: {e}) - listing Scoop apps only')
         proc = None
 
     # 2. Fast local Scoop scan (<15ms)
@@ -43,7 +44,8 @@ def get_installed_packages(query=""):
     user_home = os.path.expanduser('~')
     scoop_dirs = [
         os.environ.get('SCOOP', os.path.join(user_home, 'scoop')),
-        os.environ.get('SCOOP_GLOBAL', os.path.join(os.environ.get('ProgramData', r'C:\ProgramData'), 'scoop'))
+        os.environ.get('SCOOP_GLOBAL', os.path.join(
+            os.environ.get('ProgramData', r'C:\ProgramData'), 'scoop'))
     ]
 
     for base_root in scoop_dirs:
@@ -84,7 +86,8 @@ def get_installed_packages(query=""):
                     pass
             if not ver:
                 try:
-                    subs = [s for s in os.listdir(app_path) if s != 'current' and os.path.isdir(os.path.join(app_path, s))]
+                    subs = [s for s in os.listdir(app_path) if s != 'current' and os.path.isdir(
+                        os.path.join(app_path, s))]
                     if subs:
                         ver = subs[-1]
                 except OSError:
@@ -107,7 +110,8 @@ def get_installed_packages(query=""):
             # Without this a failed 'winget list' looked exactly like an empty machine,
             # and the caller's "nothing matches" note sent people hunting in the registry.
             reason = (stderr_data or '').strip().splitlines()
-            warn(f"winget list exited {proc.returncode}" + (f': {reason[0]}' if reason else ''))
+            warn(f"winget list exited {proc.returncode}" +
+                 (f': {reason[0]}' if reason else ''))
         lines = stdout_data.splitlines()
         header_idx = -1
         for i, line in enumerate(lines):
@@ -129,11 +133,14 @@ def get_installed_packages(query=""):
                 if not line.strip():
                     continue
                 name = line[:id_pos].strip() if id_pos > 0 else line.strip()
-                pkg_id = line[id_pos:ver_pos].strip() if ver_pos > id_pos else line[id_pos:].strip()
+                pkg_id = line[id_pos:ver_pos].strip(
+                ) if ver_pos > id_pos else line[id_pos:].strip()
                 if not pkg_id:
                     continue
-                ver = line[ver_pos:ver_end].strip() if (ver_end > ver_pos and ver_pos > 0) else (line[ver_pos:].strip() if ver_pos > 0 else '')
-                src = line[src_pos:].strip() if (src_pos > 0 and len(line) > src_pos) else ''
+                ver = line[ver_pos:ver_end].strip() if (ver_end > ver_pos and ver_pos > 0) else (
+                    line[ver_pos:].strip() if ver_pos > 0 else '')
+                src = line[src_pos:].strip() if (
+                    src_pos > 0 and len(line) > src_pos) else ''
                 mgr = 'msstore' if 'msstore' in src.lower() else 'winget'
 
                 if query_lower and query_lower not in name.lower() and query_lower not in pkg_id.lower():
@@ -149,6 +156,7 @@ def get_installed_packages(query=""):
                 })
 
     return scoop_packages + winget_packages
+
 
 if __name__ == '__main__':
     q = sys.argv[1] if len(sys.argv) > 1 else ""
