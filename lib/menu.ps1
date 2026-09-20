@@ -29,6 +29,16 @@ EXAMPLES
 
 EXPLICIT TARGETS (skip fzf)
     scoop:main/git            winget:Neovim.Neovim        msstore:9WZDNCRFJB4M
+    s:main/git                w:Neovim.Neovim             m:9WZDNCRFJB4M
+                              Short forms work anywhere a target is named
+
+ONE MANAGER ONLY (paste-ready)
+    pkg scoop install extras/tor-browser
+                              Installs that exact Scoop target, no fzf
+    pkg winget install --id Neovim.Neovim -e
+                              Same through Winget; manager flags are ignored
+    pkg scoop search          Fzf over Scoop entries only (also: uninstall, rm)
+    pkg winget list           Verbs pkg does not wrap run the manager itself
 
 FZF SHORTCUTS
     Tab select | Shift-Tab up-select | Enter confirm | ? toggle info | Esc cancel

@@ -123,6 +123,55 @@ function Get-PkgDependency {
     return ($missing.Count -eq 0)
 }
 
+# A version flag is the cheapest proof that a name in PATH is the tool itself and
+# not a Windows store alias, which opens the Store and exits without running.
+$script:PkgRuntimeProbe = @{
+    fzf    = @('--version')
+    python = @('--version')
+}
+
+function Test-PkgToolWorking {
+    <# True only when $Name exists and actually answers its version flag. #>
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { return $false }
+    $probe = $script:PkgRuntimeProbe[$Name]
+    if ($null -eq $probe) { return $true }
+    try { & $Name @($probe) *> $null } catch { return $false }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Test-PkgRuntime {
+    <#
+    .SYNOPSIS
+        Entry-point pre-flight for the tools pkg cannot work without.
+    .DESCRIPTION
+        Names every broken dependency in one message and returns $false so the
+        caller can leave before any TUI or package-manager call is made. Nothing
+        is installed from here - setup.ps1 owns that decision; this only refuses to
+        run half-broken. Not cached on purpose: installing fzf in the same shell
+        should work immediately rather than after a restart.
+    #>
+    param([string]$SetupPath = 'setup.ps1')
+
+    $broken = [System.Collections.Generic.List[string]]::new()
+    foreach ($tool in 'fzf', 'python') {
+        if (Test-PkgToolWorking $tool) { continue }
+        $why = if (Get-Command $tool -ErrorAction SilentlyContinue) {
+            "$tool is on PATH but does not run (Windows store alias?)"
+        } else {
+            "$tool is not installed"
+        }
+        $broken.Add("  - $why")
+    }
+    if ($broken.Count -eq 0) { return $true }
+
+    Write-PkgCard "pkg cannot run - missing:`n$($broken -join "`n")" -Color 203 -Bold
+    Write-PkgNote "Fix it with:  pwsh -File `"$SetupPath`"" 214
+    Write-PkgNote 'Or by hand:   scoop install fzf python   (or the same via winget)' 245
+    return $false
+}
+
 $script:PkgManagers = $null
 
 function Get-PkgManagers {
@@ -153,6 +202,38 @@ function Test-PkgManager {
 function Clear-PkgManagerCache {
     <# Forgets the lookup so a manager installed in this session is picked up. #>
     $script:PkgManagers = $null
+}
+
+# Short forms for typed targets, so `pkg i s:main/git` reads the way people type it.
+# Catalog and installed-app lines always carry the full name; the letters exist only
+# on the way in, which is why everything downstream can match on the long names.
+$script:PkgManagerAlias = @{ s = 'scoop'; w = 'winget'; m = 'msstore' }
+$script:PkgManagerNames = 'winget|scoop|msstore|[swm]'
+
+function Resolve-PkgTarget {
+    <#
+    .SYNOPSIS
+        Expands a short manager prefix to the canonical '<manager>:<id>'.
+    .DESCRIPTION
+        's:main/git' becomes 'scoop:main/git'. An already canonical target and a bare
+        word with no prefix both come back untouched, so the auto-router in
+        Invoke-PkgInstall still gets to see them.
+    #>
+    param([Parameter(Mandatory = $true, Position = 0)][AllowEmptyString()][string]$Target)
+
+    if ($Target -match "^(?<mgr>$script:PkgManagerNames):(?<id>.+)$") {
+        # -match is case-insensitive, so the name is folded; the id is left as typed
+        $mgr = $Matches['mgr'].ToLowerInvariant()
+        if ($script:PkgManagerAlias.ContainsKey($mgr)) { $mgr = $script:PkgManagerAlias[$mgr] }
+        return "$($mgr):$($Matches['id'])"
+    }
+    return $Target
+}
+
+function Test-PkgQualifiedTarget {
+    <# True when a typed target names its manager, in either the long or short form. #>
+    param([Parameter(Mandatory = $true, Position = 0)][AllowEmptyString()][string]$Target)
+    return ($Target -match "^(?:$script:PkgManagerNames):.+$")
 }
 
 $script:PkgLastOk = $false
@@ -201,6 +282,24 @@ function Invoke-PkgManagerCommand {
         return
     }
     $script:PkgLastOk = $true
+}
+
+function Select-PkgManagerLines {
+    <#
+    .SYNOPSIS
+        Keeps the lines that belong to one manager.
+    .DESCRIPTION
+        Used when the command pinned a manager (`pkg scoop install`). Matching is on
+        the raw first column - '<manager>:<id>' - so the coloured display column is
+        never inspected. Catalog lines only ever carry 'scoop:' or 'winget:'; an
+        'msstore:' target can be installed but is not listed, which is why filtering
+        on it simply yields nothing.
+    #>
+    param(
+        [AllowEmptyCollection()][string[]]$Lines,
+        [Parameter(Mandatory = $true)][string]$Manager
+    )
+    return @($Lines | Where-Object { (($_ -split "`t")[0]) -like "${Manager}:*" })
 }
 
 function Show-PkgResultCard {

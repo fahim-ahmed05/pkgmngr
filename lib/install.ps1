@@ -16,6 +16,9 @@ function Invoke-PkgInstall {
         [string]$Target
     )
 
+    # 's:main/git' and 'Scoop:main/git' both mean the same target
+    $Target = Resolve-PkgTarget -Target $Target
+
     $manager = $null
     $targetId = $Target
 
@@ -70,13 +73,20 @@ function Start-PkgInstall {
         query pre-filtering, exact bucket/source installation, and ? preview.
     .PARAMETER Packages
         Search terms (pre-fill fzf) or explicit prefixed targets ('scoop:main/git',
-        'winget:Neovim.Neovim') which install directly. The token '-Update'
-        refreshes sources before loading the catalog.
+        's:main/git', 'winget:Neovim.Neovim') which install directly. The token
+        '-Update' refreshes sources before loading the catalog.
+    .PARAMETER Manager
+        Narrows the browse picker to one manager, set by `pkg scoop install` and
+        friends. Targets already name their manager, so this only filters what is
+        offered; it never overrides an explicit prefix.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-        [string[]]$Packages
+        [string[]]$Packages,
+
+        [ValidateSet('', 'scoop', 'winget', 'msstore')]
+        [string]$Manager = ''
     )
 
     # Split off flags
@@ -90,7 +100,7 @@ function Start-PkgInstall {
     }
 
     # Direct install when every argument is an explicit manager-prefixed target
-    $explicit = @($args_ | Where-Object { $_ -match '^(winget|scoop|msstore):' })
+    $explicit = @($args_ | Where-Object { Test-PkgQualifiedTarget $_ })
     if ($args_.Count -gt 0 -and $explicit.Count -eq $args_.Count) {
         $ok = 0
         $failed = [System.Collections.Generic.List[string]]::new()
@@ -110,6 +120,18 @@ function Start-PkgInstall {
 
     # Only offer what this machine can actually install
     $catalog = Select-PkgActionableLines (Get-PkgCatalog)
+    if ($Manager) {
+        $catalog = Select-PkgManagerLines -Lines $catalog -Manager $Manager
+        if ($catalog.Count -eq 0) {
+            if ($Manager -eq 'msstore') {
+                # The catalog is Scoop + Winget; a Store id is installable but never listed
+                Write-PkgNote "[-] The catalog has no Store entries - install by id: pkg install msstore:<product-id>" 214
+            } else {
+                Write-PkgNote "[-] The catalog has no $Manager entries - try 'pkg update' first." 214
+            }
+            return
+        }
+    }
     $query = $args_ -join ' '
     $selected = @(Show-PkgPicker -Lines $catalog -Mode 'install' -Query $query)
 

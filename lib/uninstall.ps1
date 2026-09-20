@@ -73,13 +73,19 @@ function Start-PkgUninstall {
         Searches and uninstalls applications installed via Scoop or Winget.
     .PARAMETER Packages
         Search terms (pre-fill fzf), an explicit prefixed target ('scoop:git',
-        'winget:Neovim.Neovim') for direct uninstall, or the token '-Force'
-        to bypass confirmation prompts.
+        's:git', 'winget:Neovim.Neovim') for direct uninstall, or the token
+        '-Force' to bypass confirmation prompts.
+    .PARAMETER Manager
+        Narrows the picker and the installed-app list to one manager, set by
+        `pkg scoop rm` and friends.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-        [string[]]$Packages
+        [string[]]$Packages,
+
+        [ValidateSet('', 'scoop', 'winget', 'msstore')]
+        [string]$Manager = ''
     )
 
     # Split off flags
@@ -88,20 +94,25 @@ function Start-PkgUninstall {
         if ($_ -match '^(?i)(-force|--force|-f)$') { $force = $true; $false } else { $true }
     })
 
-    # Direct uninstall for a single explicit prefixed target
-    if ($args_.Count -eq 1 -and $args_[0] -match '^(?<mgr>winget|scoop|msstore):(?<id>.+)$') {
-        $mgr = $Matches['mgr']
-        $id  = $Matches['id']
-        if ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?")) {
-            Invoke-PkgUninstall -Manager $mgr -Id $id
-            if ($script:PkgLastOk) {
-                Show-PkgResultCard -Verb 'Removed' -Ok 1
-            } else {
-                Show-PkgResultCard -Verb 'Removed' -Ok 0 -Failed @("$($mgr):$id")
+    # Direct uninstall whenever every argument already names its manager
+    $explicit = @($args_ | Where-Object { Test-PkgQualifiedTarget $_ })
+    if ($args_.Count -gt 0 -and $explicit.Count -eq $args_.Count) {
+        $removed = 0
+        $failed = [System.Collections.Generic.List[string]]::new()
+        $answered = 0
+        foreach ($target in $explicit) {
+            $mgr, $id = (Resolve-PkgTarget $target) -split ':', 2
+            if (-not ($force -or (Confirm-Pkg "Uninstall '$id' via ${mgr}?"))) {
+                Write-PkgNote "[-] Skipped $id."
+                $answered++
+                continue
             }
-        } else {
-            Write-PkgNote "[-] Skipped $id."
+            $answered++
+            Invoke-PkgUninstall -Manager $mgr -Id $id
+            if ($script:PkgLastOk) { $removed++ } else { $failed.Add("$($mgr):$id") }
         }
+        # Nothing was agreed to, so there is no result to report
+        if ($answered -gt 0) { Show-PkgResultCard -Verb 'Removed' -Ok $removed -Failed $failed.ToArray() }
         return
     }
 
@@ -112,10 +123,17 @@ function Start-PkgUninstall {
     }
 
     $query = $args_ -join ' '
-    $installed = Get-PkgInstalled -Query $query
+    $installed = @(Get-PkgInstalled -Query $query)
+    if ($Manager) {
+        # msstore apps are winget's to remove, so a winget filter keeps them
+        $installed = @($installed | Where-Object {
+            $_.Manager -eq $Manager -or ($Manager -eq 'winget' -and $_.Manager -eq 'msstore')
+        })
+    }
 
     if ($installed.Count -eq 0) {
-        Write-PkgNote "[-] No installed packages found matching '$query'." 214
+        $scope = if ($Manager) { " $Manager" } else { '' }
+        Write-PkgNote "[-] No installed$scope packages found matching '$query'." 214
         return
     }
 
