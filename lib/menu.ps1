@@ -88,7 +88,7 @@ function Invoke-PkgMenu {
             '--delimiter=\t', '--with-nth=2', '--nth=1,2',
             "--header=$header",
             '--header-first',
-            '--prompt=pkg > ',
+            '--prompt=select > ',
             '--pointer=>',
             '--layout=reverse', '--border=rounded', '--height=60%', '--min-height=12',
             # inline-right pins the match counter to the right end of the prompt row
