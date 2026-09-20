@@ -9,11 +9,37 @@ $script:PkgHasGum = [bool](Get-Command gum -ErrorAction SilentlyContinue)
 # Keep python's piped stdout UTF-8 regardless of console code page (badges/ellipsis in catalog)
 $env:PYTHONIOENCODING = 'utf-8'
 
+# gum removes its ANSI styling whenever stdout is not a terminal, and every card
+# and note below is piped through Out-Host on purpose (see Write-PkgCard) - so
+# without this the whole UI renders in the terminal's default colour and only the
+# box shape survives. Measured on gum v2.0.1: 0 escape sequences piped, 6 per
+# text line with this set. FORCE_COLOR is ignored by this gum build.
+$env:CLICOLOR_FORCE = '1'
+
+# The 256-color ids the library passes around, folded onto what a console host
+# without gum can actually render. Palette: winget cyan, scoop gold, msstore
+# violet, install green, uninstall red, notes grey.
+function Get-PkgConsoleColor {
+    param([Parameter(Mandatory = $true)][int]$Id)
+    switch ($Id) {
+        39  { 'Cyan' }
+        214 { 'Yellow' }
+        141 { 'Magenta' }
+        42  { 'Green' }
+        203 { 'Red' }
+        245 { 'DarkGray' }
+        default { 'Gray' }
+    }
+}
+
 function Write-PkgCard {
     <#
     .SYNOPSIS
         Renders a bordered status card (gum styled, plain fallback).
     .DESCRIPTION
+        The colour styles both the rounded border and the text, so a card stays
+        readable at a glance even while lines of manager output scroll past it.
+
         Output goes through Out-Host, not the pipeline: gum writes to stdout, so a
         card emitted inside a function whose result is captured would otherwise
         become part of that result (extra lines in a catalog, a truthy array where
@@ -27,11 +53,15 @@ function Write-PkgCard {
         [switch]$Bold
     )
     if ($script:PkgHasGum) {
-        $styleArgs = @('style', '--border', 'normal', '--border-foreground', $Color, '--padding', '0 2', '--margin', '1 0')
+        $styleArgs = @(
+            'style', '--border', 'rounded',
+            '--border-foreground', $Color, '--foreground', $Color,
+            '--padding', '0 2', '--margin', '1 0'
+        )
         if ($Bold) { $styleArgs += '--bold' }
         gum @styleArgs -- $Text | Out-Host
     } else {
-        Write-Host $Text -ForegroundColor DarkCyan
+        Write-Host $Text -ForegroundColor (Get-PkgConsoleColor -Id $Color)
     }
 }
 
@@ -46,7 +76,7 @@ function Write-PkgNote {
     if ($script:PkgHasGum) {
         gum style --foreground $Color -- $Text | Out-Host
     } else {
-        Write-Host $Text
+        Write-Host $Text -ForegroundColor (Get-PkgConsoleColor -Id $Color)
     }
 }
 
@@ -238,9 +268,15 @@ function Test-PkgQualifiedTarget {
 
 $script:PkgLastOk = $false
 
-# 0x8A150034 - winget's "no applicable upgrade found", the normal answer when a
-# package is already installed at the requested version. Measured, not guessed.
-$script:PkgWingetBenignCodes = @(-1978335212)
+# Winget codes that mean "nothing went wrong, there was nothing to do":
+#   0x8A150014  update not applicable - the installed package is already at the
+#               requested version, or not upgradeable through these sources.
+#   0x8A15002B  no applicable update found, printed as "No available upgrade
+#               found.  No newer package versions are available from the
+#               configured sources." - what `winget upgrade
+#               Microsoft.AppInstaller` answers on a current machine.
+# Both measured here rather than guessed; a genuine failure uses another code.
+$script:PkgWingetBenignCodes = @(-1978335212, -1978335189)
 
 function Invoke-PkgManagerCommand {
     <#
@@ -255,6 +291,10 @@ function Invoke-PkgManagerCommand {
 
         $global:LASTEXITCODE is zeroed first because it otherwise still holds the
         previous command's code, which reads as a fresh failure.
+
+        The outcome is recorded, not narrated: $script:PkgLastOk is the only thing
+        a caller gets, because the manager has already printed its own explanation
+        and pkg's cards restate the failure by name.
     .PARAMETER BenignExitCode
         Codes that mean "nothing was wrong, there was nothing to do". Without them
         an up-to-date machine would be reported as a failure.
@@ -278,7 +318,13 @@ function Invoke-PkgManagerCommand {
             $script:PkgLastOk = $true
             return
         }
-        Write-PkgNote "[-] $Label failed with exit code $global:LASTEXITCODE" 203
+        # Deliberately silent. The manager has already said what went wrong, in
+        # words, on the screen just above, and every caller records the failure:
+        # install/uninstall name the package on the result card, the update steps
+        # name themselves on the summary card. Repeating it as a bare HRESULT
+        # added noise nobody can act on. The one case where pkg is the only
+        # witness is a command that could not start at all, and the catch block
+        # above still reports that.
         return
     }
     $script:PkgLastOk = $true

@@ -72,7 +72,7 @@ scoop install git fzf python gum
 | `pkg scoop install extras/tor-browser` | Installs through Scoop directly - the manager name pins the manager |
 | `pkg winget list` / `pkg scoop bucket add extras` | Verbs pkg does not wrap go to the manager itself |
 | `pkg update` | Refresh Winget sources + Scoop buckets |
-| `pkg upgrade` | Upgrade everything (Winget, Scoop, UV tools if present) |
+| `pkg upgrade` | Upgrade everything installed through Winget and Scoop |
 | `pkg help` | Styled usage reference |
 
 Aliases: `install` = `i` / `add` / `a` / `get` / `search` · `uninstall` = `u` / `rm` / `remove` / `r` / `del`
@@ -164,7 +164,17 @@ pkgmngr/
 - The launch menu is fzf-based, not `gum choose`: gum centers its list in a viewport whose
   width it measures itself and clips item text in some terminals. All glyphs are ASCII.
 - Colors: Winget cyan `39`, Scoop gold `214`, MS Store violet `141`, install accent green
-  `42`, uninstall accent red `203`. Zero emojis.
+  `42`, uninstall accent red `203`. Zero emojis. A card colours its rounded border *and*
+  its text with the same id; without gum installed the ids fold onto the console's own
+  eight colors.
+- gum strips its ANSI whenever stdout is not a terminal, and every card here is piped
+  through `Out-Host` on purpose - so `$env:CLICOLOR_FORCE = '1'` is set at load. Without
+  it the boxes render in the default color and only the shape survives (measured on gum
+  v2.0.1: 0 escape sequences piped, 6 per text line forced).
+- A failed manager command is reported once, by name, on the result or summary card.
+  Winget and Scoop have already printed the reason in words, so pkg does not repeat it as
+  a bare exit code; codes that only mean "nothing to do" (`0x8A150014`, `0x8A15002B`) are
+  never treated as failures at all.
 
 ## Uninstall
 

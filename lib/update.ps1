@@ -73,7 +73,7 @@ function Update-PkgSources {
 function Update-PkgAll {
     <#
     .SYNOPSIS
-        Upgrades every installed package across the managers present, plus UV tools.
+        Upgrades every installed package across the managers present.
     #>
     if (@(Get-PkgManagers).Count -eq 0) {
         Write-PkgNote '[-] Neither Scoop nor Winget is installed - nothing to upgrade.' 203
@@ -88,16 +88,25 @@ function Update-PkgAll {
         Invoke-PkgManagerCommand -Label 'winget source update' -Command { winget source update }
         if (-not $script:PkgLastOk) { $failed.Add('winget source update') }
 
-        Invoke-PkgManagerCommand -Label 'winget upgrade App Installer' -Command {
+        # App Installer ships winget itself, so it is refreshed before the rest.
+        # A current machine answers "no available upgrade found" with a non-zero
+        # code, hence the benign list; any other code is a real failure and gets
+        # named on the summary card, with winget's own words on the screen above.
+        Invoke-PkgManagerCommand -Label 'winget upgrade App Installer' `
+            -BenignExitCode $script:PkgWingetBenignCodes -Command {
             winget upgrade Microsoft.AppInstaller --accept-package-agreements --accept-source-agreements
         }
+        if (-not $script:PkgLastOk) { $failed.Add('App Installer') }
 
         Write-PkgCard 'Upgrading Winget Packages' -Color 39 -Bold
-        # Deliberately untallied: winget exits non-zero when everything is already
-        # up to date, which is the common case and not a failure.
-        Invoke-PkgManagerCommand -Label 'winget upgrade --all' -Command {
+        # Tallied now that the 'nothing to do' codes are benign: an up-to-date
+        # machine still finishes green, while a package that failed to upgrade
+        # (installer in use, hash mismatch, ...) is reported once, by name.
+        Invoke-PkgManagerCommand -Label 'winget upgrade --all' `
+            -BenignExitCode $script:PkgWingetBenignCodes -Command {
             winget upgrade --all --accept-package-agreements --accept-source-agreements
         }
+        if (-not $script:PkgLastOk) { $failed.Add('winget packages') }
     } else {
         $skipped.Add('winget')
     }
@@ -108,16 +117,15 @@ function Update-PkgAll {
         if (-not $script:PkgLastOk) { $failed.Add('scoop update') }
 
         Invoke-PkgManagerCommand -Label 'scoop update -a' -Command { scoop update -a }
+        if (-not $script:PkgLastOk) { $failed.Add('scoop buckets') }
+
+        # Left untallied on purpose: `scoop status` exists to print what is
+        # outdated or broken, and that table is the report - not a failure.
         Invoke-PkgManagerCommand -Label 'scoop status' -Command { scoop status }
 
         Update-PkgScoopIndex
     } else {
         $skipped.Add('scoop')
-    }
-
-    if (Get-Command uv -ErrorAction SilentlyContinue) {
-        Write-PkgCard 'Upgrading UV Tools' -Color 42 -Bold
-        Invoke-PkgManagerCommand -Label 'uv tool upgrade --all' -Command { uv tool upgrade --all }
     }
 
     Clear-PkgInputBuffer
